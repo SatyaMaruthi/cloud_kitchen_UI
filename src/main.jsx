@@ -4,6 +4,26 @@ import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, use
 import client from "./api/client";
 import "./styles.css";
 
+function sellerMatchesQuery(seller, query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return true;
+  const hay = (seller.brandName || "").toLowerCase();
+  return q
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((token) => hay.includes(token));
+}
+
+function sellerMatchesCategory(seller, categoryLabel) {
+  const cat = (categoryLabel || "").toLowerCase();
+  if (!cat) return true;
+  const name = (seller.brandName || "").toLowerCase();
+  if (cat.includes("home")) return /home|kitchen|meal|cook|thali|daily|bowl/.test(name);
+  if (cat.includes("fruit")) return /fruit|berry|fresh|juice|smoothie|salad|bowl/.test(name);
+  if (cat.includes("protein")) return /protein|gym|fit|muscle|keto|healthy|egg|chicken|paneer|tofu/.test(name);
+  return true;
+}
+
 function SellerDetail() {
   const { id } = useParams();
   const [detail, setDetail] = React.useState(null);
@@ -124,7 +144,7 @@ function Login() {
 
 function Home() {
   const navigate = useNavigate();
-  const categories = ["Home Meals", "Fruit Bowls", "Monthly Plans", "Protein Packs"];
+  const categories = ["Home Meals", "Fruit Bowls", "Protein Packs"];
   const offers = [
     { title: "40% OFF", sub: "On first subscription" },
     { title: "Free Delivery", sub: "Orders above Rs. 299" }
@@ -169,23 +189,31 @@ function Home() {
           </div>
         ))}
       </div>
-      <Link className="btn full" to="/sellers">Explore Nearby Sellers</Link>
+      <Link
+        className="btn full"
+        to={search.trim() ? `/sellers?${new URLSearchParams({ q: search.trim() }).toString()}` : "/sellers"}
+      >
+        Explore Nearby Sellers
+      </Link>
     </div>
   );
 }
 
 function NearbySellers() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [items, setItems] = React.useState([]);
   const [error, setError] = React.useState("");
-  const [query, setQuery] = React.useState("");
-  const [category, setCategory] = React.useState("");
+  const [draftQ, setDraftQ] = React.useState("");
+
+  const { query, category } = React.useMemo(() => {
+    const p = new URLSearchParams(location.search);
+    return { query: (p.get("q") || "").trim(), category: p.get("category") || "" };
+  }, [location.search]);
 
   React.useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    setQuery(params.get("q") || "");
-    setCategory(params.get("category") || "");
-  }, [location.search]);
+    setDraftQ(query);
+  }, [query]);
 
   React.useEffect(() => {
     client.get("/sellers/nearby?lat=12.9716&lon=77.5946&radiusKm=10")
@@ -193,24 +221,81 @@ function NearbySellers() {
       .catch(() => setError("Failed to load sellers"));
   }, []);
 
-  const filtered = items.filter((s) => {
-    const nameMatch = !query || s.brandName.toLowerCase().includes(query.toLowerCase());
-    const cat = category.toLowerCase();
-    const catMatch =
-      !cat ||
-      (cat.includes("fruit") && s.brandName.toLowerCase().includes("fruit")) ||
-      (cat.includes("home") && s.brandName.toLowerCase().includes("home")) ||
-      (cat.includes("monthly") && true) ||
-      (cat.includes("protein") && true);
-    return nameMatch && catMatch;
-  });
+  const filtered = React.useMemo(
+    () => items.filter((s) => sellerMatchesQuery(s, query) && sellerMatchesCategory(s, category)),
+    [items, query, category]
+  );
+
+  const exploreCategories = ["Home Meals", "Fruit Bowls", "Protein Packs"];
+
+  function applyUrl(next) {
+    const p = new URLSearchParams(location.search);
+    if (next.q !== undefined) {
+      const v = (next.q || "").trim();
+      if (v) p.set("q", v);
+      else p.delete("q");
+    }
+    if (next.category !== undefined) {
+      if (next.category) p.set("category", next.category);
+      else p.delete("category");
+    }
+    const s = p.toString();
+    navigate({ pathname: "/sellers", search: s ? `?${s}` : "" }, { replace: true });
+  }
+
+  function onSearchSubmit(e) {
+    e.preventDefault();
+    applyUrl({ q: draftQ });
+  }
+
+  function clearFilters() {
+    navigate({ pathname: "/sellers", search: "" }, { replace: true });
+    setDraftQ("");
+  }
 
   return (
     <div className="page">
       <h2 className="title">Top rated near you</h2>
+      <form className="card explore-filters" onSubmit={onSearchSubmit}>
+        <p className="muted compact" style={{ marginBottom: 6 }}>Search kitchens</p>
+        <div className="row">
+          <input
+            className="input search"
+            placeholder="Name, e.g. Healthy, Bowls…"
+            value={draftQ}
+            onChange={(e) => setDraftQ(e.target.value)}
+          />
+          <button className="btn" type="submit">Search</button>
+        </div>
+        <p className="muted compact" style={{ margin: "10px 0 6px" }}>Category</p>
+        <div className="horizontal-scroll">
+          <button
+            type="button"
+            className={`category-pill ${!category ? "active-filter" : ""}`}
+            onClick={() => applyUrl({ category: "" })}
+          >
+            All
+          </button>
+          {exploreCategories.map((c) => (
+            <button
+              type="button"
+              key={c}
+              className={`category-pill clickable ${category === c ? "active-filter" : ""}`}
+              onClick={() => applyUrl({ category: c })}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+        {(query || category) && (
+          <button type="button" className="link-btn clear-filters" onClick={clearFilters}>
+            Clear filters
+          </button>
+        )}
+      </form>
       {(query || category) && (
         <p className="muted">
-          Filters: {query ? `search="${query}"` : ""} {category ? `category="${category}"` : ""}
+          Active: {query ? `search “${query}”` : ""}{query && category ? " · " : ""}{category ? `category “${category}”` : ""}
         </p>
       )}
       {error && <p className="muted">{error}</p>}
