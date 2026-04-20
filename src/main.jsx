@@ -28,6 +28,8 @@ function SellerDetail() {
   const { id } = useParams();
   const [detail, setDetail] = React.useState(null);
   const [msg, setMsg] = React.useState("");
+  const [weeklyEstimate, setWeeklyEstimate] = React.useState({});
+  const [quantities, setQuantities] = React.useState({});
 
   React.useEffect(() => {
     client.get(`/sellers/${id}`).then((r) => setDetail(r.data));
@@ -47,6 +49,16 @@ function SellerDetail() {
     }
   }
 
+  async function calculateWeeklyAmount(planId) {
+    const quantity = Number(quantities[planId] || 1);
+    try {
+      const { data } = await client.get(`/sellers/weekly-amount?planId=${planId}&quantity=${quantity}&days=7`);
+      setWeeklyEstimate((prev) => ({ ...prev, [planId]: data.amount }));
+    } catch {
+      setMsg("Could not calculate weekly amount");
+    }
+  }
+
   if (!detail) return <div className="page card">Loading seller details...</div>;
   return (
     <div className="page">
@@ -62,6 +74,18 @@ function SellerDetail() {
             <p className="badge">{p.durationDays} Days</p>
             <h4>{p.name}</h4>
             <p className="price">Rs. {p.price}</p>
+            <div className="row">
+              <input
+                className="input"
+                style={{ maxWidth: 96 }}
+                type="number"
+                min="1"
+                value={quantities[p.id] || 1}
+                onChange={(e) => setQuantities((prev) => ({ ...prev, [p.id]: e.target.value }))}
+              />
+              <button className="btn secondary" onClick={() => calculateWeeklyAmount(p.id)}>Weekly Amount</button>
+            </div>
+            {weeklyEstimate[p.id] && <p className="muted">Weekly amount: Rs. {weeklyEstimate[p.id]}</p>}
             <button className="btn full" onClick={() => subscribe(p.id)}>Subscribe</button>
           </div>
         ))}
@@ -72,32 +96,85 @@ function SellerDetail() {
 }
 
 function MySubscriptions() {
-  const [subs, setSubs] = React.useState([]);
+  const [active, setActive] = React.useState([]);
+  const [past, setPast] = React.useState([]);
+  const [msg, setMsg] = React.useState("");
+
+  async function load() {
+    const [a, p] = await Promise.all([
+      client.get("/subscriptions/active-orders", { headers: { "X-User-Id": "1" } }),
+      client.get("/subscriptions/past-orders", { headers: { "X-User-Id": "1" } })
+    ]);
+    setActive(a.data);
+    setPast(p.data);
+  }
+
   React.useEffect(() => {
-    client.get("/subscriptions", { headers: { "X-User-Id": "1" } }).then((r) => setSubs(r.data));
+    load().catch(() => setMsg("Failed to load orders"));
   }, []);
+
+  async function editDelivery(subscriptionId, date) {
+    try {
+      await client.patch(`/subscriptions/${subscriptionId}/edit-delivery?date=${date}`, {
+        timeZone: "Asia/Kolkata",
+        mobileNumber: "9876543210"
+      });
+      setMsg("Active order updated");
+      await load();
+    } catch {
+      setMsg("Could not edit order");
+    }
+  }
 
   return (
     <div className="page">
       <h2 className="title">My Subscriptions</h2>
+      <h3 className="section-title">Active Orders</h3>
       <div className="grid">
-        {subs.map((s) => (
-          <div className="card" key={s.subscriptionId}>
-            <h4>Subscription #{s.subscriptionId}</h4>
-            <p className="status">{s.status}</p>
-            <p className="muted">Deliveries: {s.deliveries.length}</p>
+        {active.map((s) => (
+          <div className="card" key={`active-${s.subscriptionId}`}>
+            <h4>{s.planName} - #{s.subscriptionId}</h4>
+            <p className="muted">Weekly menu: {s.weeklyMenuName} (Rs. {s.weeklyAmount})</p>
+            {s.deliveries.map((d) => (
+              <div key={`${s.subscriptionId}-${d.date}`} className="card" style={{ marginTop: 8 }}>
+                <p className="muted">Delivery by: {d.deliveryBy}</p>
+                <p className="muted">Time zone: {d.timeZone}</p>
+                <p className="muted">Mobile: {d.mobileNumber}</p>
+                <p className="muted">Live tracking: {d.liveTrackingUrl}</p>
+                <button className="btn secondary full" onClick={() => editDelivery(s.subscriptionId, d.date)}>Edit order</button>
+              </div>
+            ))}
           </div>
         ))}
       </div>
+      <h3 className="section-title">Past Orders</h3>
+      <div className="grid">
+        {past.map((s) => (
+          <div className="card" key={`past-${s.subscriptionId}`}>
+            <h4>{s.planName} - #{s.subscriptionId}</h4>
+            {s.deliveries.map((d) => (
+              <div key={`${s.subscriptionId}-past-${d.date}`} className="card" style={{ marginTop: 8 }}>
+                <p className="muted">Delivered by: {d.deliveredBy || "-"}</p>
+                <p className="muted">Delivered on: {d.deliveredOn || "-"}</p>
+                <p className="muted">Rating: {d.rating || "-"}</p>
+                <p className="muted">Feedback: {d.feedback || "-"}</p>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {msg && <p className="toast">{msg}</p>}
     </div>
   );
 }
 
 function Login() {
   const navigate = useNavigate();
-  const [form, setForm] = React.useState({ email: "user@test.com", password: "pass123" });
+  const [form, setForm] = React.useState({ email: "user@test.com", password: "pass123", fullName: "" });
   const [msg, setMsg] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
+  const [otp, setOtp] = React.useState("");
+  const [otpRequested, setOtpRequested] = React.useState(false);
 
   async function login() {
     try {
@@ -108,6 +185,41 @@ function Login() {
       setTimeout(() => navigate("/home"), 400);
     } catch {
       setMsg("Invalid credentials");
+    }
+  }
+
+  async function requestOtp() {
+    try {
+      const { data } = await client.post("/auth/login/otp/request", { email: form.email });
+      setOtpRequested(true);
+      setMsg(`${data.message}. Demo OTP: ${data.existingUser ? "123456" : "123456"}`);
+    } catch {
+      setMsg("Failed to request OTP");
+    }
+  }
+
+  async function verifyOtp() {
+    try {
+      const { data } = await client.post("/auth/login/otp/verify", {
+        email: form.email,
+        otp,
+        fullName: form.fullName
+      });
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("email", data.email);
+      setMsg("Logged in with OTP");
+      setTimeout(() => navigate("/home"), 400);
+    } catch {
+      setMsg("Invalid OTP");
+    }
+  }
+
+  async function forgotPassword() {
+    try {
+      await client.post("/auth/forgot-password", { email: form.email });
+      setMsg("Reset OTP sent. Use demo OTP 654321");
+    } catch {
+      setMsg("Could not trigger forgot password");
     }
   }
 
@@ -136,6 +248,25 @@ function Login() {
           </button>
         </div>
         <button className="btn full" onClick={login}>Continue</button>
+        <button className="btn secondary full" onClick={requestOtp}>Login/Register with OTP</button>
+        {otpRequested && (
+          <>
+            <input
+              className="input"
+              placeholder="OTP"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+            />
+            <input
+              className="input"
+              placeholder="Full name (new users)"
+              value={form.fullName}
+              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+            />
+            <button className="btn full" onClick={verifyOtp}>Verify OTP</button>
+          </>
+        )}
+        <button className="link-btn" onClick={forgotPassword}>Forgot password</button>
         <p className="muted">{msg}</p>
       </div>
     </div>
@@ -319,6 +450,32 @@ function NearbySellers() {
 function Profile() {
   const navigate = useNavigate();
   const email = localStorage.getItem("email") || "user@test.com";
+  const [rewards, setRewards] = React.useState(null);
+  const [favorites, setFavorites] = React.useState([]);
+  const [favInput, setFavInput] = React.useState("");
+  const [msg, setMsg] = React.useState("");
+
+  React.useEffect(() => {
+    client.get("/profile/rewards", { headers: { "X-User-Id": "1" } }).then((r) => setRewards(r.data));
+    client.get("/profile/favorites", { headers: { "X-User-Id": "1" } }).then((r) => setFavorites(r.data));
+  }, []);
+
+  async function addFavorite() {
+    if (!favInput.trim()) return;
+    await client.post("/profile/favorites", { name: favInput.trim() }, { headers: { "X-User-Id": "1" } });
+    setFavorites((prev) => [...prev, favInput.trim()]);
+    setFavInput("");
+    setMsg("Saved to favourites for future");
+  }
+
+  async function deactivate() {
+    try {
+      await client.post("/auth/deactivate", { email, otp: "123456" });
+      setMsg("Account deactivated");
+    } catch {
+      setMsg("Deactivation failed. Request OTP first.");
+    }
+  }
 
   function logout() {
     localStorage.removeItem("token");
@@ -332,6 +489,15 @@ function Profile() {
         <h2 className="title">Profile</h2>
         <p className="muted">Signed in as</p>
         <p><strong>{email}</strong></p>
+        {rewards && <p className="muted">Rewards: {rewards.points} points ({rewards.tier})</p>}
+        <h4>Favourites</h4>
+        <div className="row">
+          <input className="input" value={favInput} onChange={(e) => setFavInput(e.target.value)} placeholder="Save item for future" />
+          <button className="btn" onClick={addFavorite}>Save</button>
+        </div>
+        {favorites.map((f) => <p key={f} className="muted">{f}</p>)}
+        {msg && <p className="muted">{msg}</p>}
+        <button className="btn secondary full" onClick={deactivate}>Deactivate Account</button>
         <button className="btn secondary full" onClick={logout}>Logout</button>
       </div>
     </div>
