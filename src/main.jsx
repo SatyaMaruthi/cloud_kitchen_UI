@@ -50,8 +50,8 @@ function SellerDetail() {
   }
 
   async function calculateWeeklyAmount(planId) {
-    const quantity = Number(quantities[planId] || 1);
     try {
+      const quantity = Number(quantities[planId] || 1);
       const { data } = await client.get(`/sellers/weekly-amount?planId=${planId}&quantity=${quantity}&days=7`);
       setWeeklyEstimate((prev) => ({ ...prev, [planId]: data.amount }));
     } catch {
@@ -168,19 +168,22 @@ function MySubscriptions() {
   );
 }
 
-function Login() {
+function Login({ onLoginSuccess }) {
   const navigate = useNavigate();
   const [form, setForm] = React.useState({ email: "user@test.com", password: "pass123", fullName: "" });
   const [msg, setMsg] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [otp, setOtp] = React.useState("");
   const [otpRequested, setOtpRequested] = React.useState(false);
+  const [otpChannel, setOtpChannel] = React.useState("EMAIL");
+  const [mobileNumber, setMobileNumber] = React.useState("");
 
   async function login() {
     try {
       const { data } = await client.post("/auth/login", form);
       localStorage.setItem("token", data.token);
       localStorage.setItem("email", data.email);
+      onLoginSuccess?.();
       setMsg("Welcome back!");
       setTimeout(() => navigate("/home"), 400);
     } catch {
@@ -190,9 +193,13 @@ function Login() {
 
   async function requestOtp() {
     try {
-      const { data } = await client.post("/auth/login/otp/request", { email: form.email });
+      const { data } = await client.post("/auth/login/otp/request", {
+        email: form.email,
+        channel: otpChannel,
+        mobileNumber
+      });
       setOtpRequested(true);
-      setMsg(`${data.message}. Demo OTP: ${data.existingUser ? "123456" : "123456"}`);
+      setMsg(`${data.message} to ${data.destination}`);
     } catch {
       setMsg("Failed to request OTP");
     }
@@ -207,6 +214,7 @@ function Login() {
       });
       localStorage.setItem("token", data.token);
       localStorage.setItem("email", data.email);
+      onLoginSuccess?.();
       setMsg("Logged in with OTP");
       setTimeout(() => navigate("/home"), 400);
     } catch {
@@ -216,8 +224,8 @@ function Login() {
 
   async function forgotPassword() {
     try {
-      await client.post("/auth/forgot-password", { email: form.email });
-      setMsg("Reset OTP sent. Use demo OTP 654321");
+      const { data } = await client.post("/auth/forgot-password", { email: form.email });
+      setMsg(`Reset OTP sent to ${data.destination}`);
     } catch {
       setMsg("Could not trigger forgot password");
     }
@@ -249,6 +257,20 @@ function Login() {
         </div>
         <button className="btn full" onClick={login}>Continue</button>
         <button className="btn secondary full" onClick={requestOtp}>Login/Register with OTP</button>
+        <div className="row">
+          <select className="input" value={otpChannel} onChange={(e) => setOtpChannel(e.target.value)}>
+            <option value="EMAIL">Email OTP</option>
+            <option value="MOBILE">Mobile OTP</option>
+          </select>
+          {otpChannel === "MOBILE" && (
+            <input
+              className="input"
+              placeholder="Mobile number"
+              value={mobileNumber}
+              onChange={(e) => setMobileNumber(e.target.value)}
+            />
+          )}
+        </div>
         {otpRequested && (
           <>
             <input
@@ -447,7 +469,7 @@ function NearbySellers() {
   );
 }
 
-function Profile() {
+function Profile({ onLogout }) {
   const navigate = useNavigate();
   const email = localStorage.getItem("email") || "user@test.com";
   const [rewards, setRewards] = React.useState(null);
@@ -480,6 +502,8 @@ function Profile() {
   function logout() {
     localStorage.removeItem("token");
     localStorage.removeItem("email");
+    client.post("/auth/logout").catch(() => {});
+    onLogout?.();
     navigate("/login");
   }
 
@@ -509,7 +533,15 @@ function Page({ title, desc }) {
 }
 
 function AppShell() {
-  const isLoggedIn = !!localStorage.getItem("token");
+  const [isLoggedIn, setIsLoggedIn] = React.useState(() => !!localStorage.getItem("token"));
+
+  React.useEffect(() => {
+    function syncAuth() {
+      setIsLoggedIn(!!localStorage.getItem("token"));
+    }
+    window.addEventListener("storage", syncAuth);
+    return () => window.removeEventListener("storage", syncAuth);
+  }, []);
 
   return (
     <div className="app-bg">
@@ -524,7 +556,7 @@ function AppShell() {
         <div className="content">
           <Routes>
             <Route path="/" element={<Navigate to={isLoggedIn ? "/home" : "/login"} replace />} />
-            <Route path="/login" element={<Login />} />
+            <Route path="/login" element={<Login onLoginSuccess={() => setIsLoggedIn(true)} />} />
             <Route path="/location" element={isLoggedIn ? <Page title="Location Selection" /> : <Navigate to="/login" replace />} />
             <Route path="/home" element={isLoggedIn ? <Home /> : <Navigate to="/login" replace />} />
             <Route path="/sellers" element={isLoggedIn ? <NearbySellers /> : <Navigate to="/login" replace />} />
@@ -533,7 +565,7 @@ function AppShell() {
             <Route path="/payments" element={isLoggedIn ? <Page title="Payment Screen" /> : <Navigate to="/login" replace />} />
             <Route path="/my-subscriptions" element={isLoggedIn ? <MySubscriptions /> : <Navigate to="/login" replace />} />
             <Route path="/calendar" element={isLoggedIn ? <Page title="Delivery Calendar" /> : <Navigate to="/login" replace />} />
-            <Route path="/profile" element={isLoggedIn ? <Profile /> : <Navigate to="/login" replace />} />
+            <Route path="/profile" element={isLoggedIn ? <Profile onLogout={() => setIsLoggedIn(false)} /> : <Navigate to="/login" replace />} />
             <Route path="/seller/dashboard" element={isLoggedIn ? <Page title="Seller Dashboard" desc="Manage menu, deliveries and earnings." /> : <Navigate to="/login" replace />} />
             <Route path="/seller/menu" element={isLoggedIn ? <Page title="Menu Management" /> : <Navigate to="/login" replace />} />
             <Route path="/seller/plans" element={isLoggedIn ? <Page title="Subscription Plans" /> : <Navigate to="/login" replace />} />
